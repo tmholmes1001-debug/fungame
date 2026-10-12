@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>are you awake?</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;1,400;1,500&family=IBM+Plex+Mono:wght@400&display=swap">
+<style>
+/* single dark world: a bedroom at 3am. one canvas, text floats over it like thoughts. */
+:root {
+  --void: #050506;
+  --ash: #b9b4ab;
+  --ash-dim: #6d6963;
+  --bone: #e8e1d3;
+  --her: #d9c7c0;
+  --wrong: #c9b8b8;
+  --warm: #f0d9b5;
+  --phone: #cfe0ff;
+  --serif: "Cormorant Garamond", "Iowan Old Style", Georgia, serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+html, body { height: 100%; margin: 0; background: var(--void); color: var(--ash); overflow: hidden; }
+body { font-family: var(--serif); -webkit-user-select: none; user-select: none; touch-action: none; }
+#stage { position: fixed; inset: 0; display: grid; place-items: center; background: var(--void); }
+#view { image-rendering: pixelated; image-rendering: crisp-edges; display: block; background: #000; }
+body.playing, body.playing * { cursor: none; }
+
+/* subtitles: thoughts, voices, the thing */
+#sub {
+  position: fixed; left: 50%; bottom: 12vh; transform: translateX(-50%);
+  width: min(88vw, 46rem); text-align: center; font-size: clamp(1.15rem, 2.4vw, 1.6rem);
+  line-height: 1.35; font-style: italic; color: var(--ash); opacity: 0;
+  transition: opacity .9s ease; text-shadow: 0 0 12px #000, 0 0 3px #000; pointer-events: none;
+}
+#sub.on { opacity: 1; }
+#sub.voice { color: var(--her); letter-spacing: .04em; }
+#sub.near { color: var(--wrong); letter-spacing: .12em; font-size: clamp(1.3rem, 2.9vw, 2rem); animation: tremble .09s infinite; }
+#sub.real { color: var(--warm); font-style: italic; }
+#sub.label { font-family: var(--mono); font-style: normal; font-size: .9rem; letter-spacing: .14em; text-transform: uppercase; color: var(--ash-dim); }
+@keyframes tremble { 0% { transform: translateX(-50%) } 50% { transform: translate(calc(-50% + 1px), -1px) } 100% { transform: translate(calc(-50% - 1px), 1px) } }
+
+#hint {
+  position: fixed; top: 4vh; left: 50%; transform: translateX(-50%); font-family: var(--mono);
+  font-size: .78rem; letter-spacing: .16em; text-transform: uppercase; color: var(--ash-dim);
+  opacity: 0; transition: opacity 1.2s; pointer-events: none; white-space: nowrap;
+}
+#hint.on { opacity: .85; }
+
+/* the phone lying on the duvet */
+#phone {
+  position: fixed; right: max(16px, 3vw); bottom: 4vh; width: min(15rem, 42vw);
+  font-family: var(--mono); font-size: .8rem; color: var(--phone); opacity: 0;
+  transition: opacity .6s ease; pointer-events: none;
+}
+#phone.on { opacity: 1; }
+#phone .bar { display: flex; justify-content: space-between; letter-spacing: .1em; opacity: .55; margin-bottom: .5rem; font-variant-numeric: tabular-nums; }
+#phone .note {
+  background: rgba(20, 26, 40, .82); border: 1px solid rgba(160, 190, 255, .18); border-radius: 10px;
+  padding: .55rem .7rem; margin-top: .4rem; box-shadow: 0 0 24px rgba(120, 160, 255, .18);
+  animation: notein .5s ease both;
+}
+#phone .note b { display: block; font-weight: 400; opacity: .6; font-size: .7rem; letter-spacing: .08em; margin-bottom: .15rem; }
+#phone .note.old { opacity: .35; }
+@keyframes notein { from { opacity: 0; transform: translateY(8px) } to { opacity: 1; transform: none } }
+
+/* start + end cards */
+.card {
+  position: fixed; inset: 0; display: grid; place-items: center; background: var(--void);
+  padding-inline: 16px; z-index: 10; transition: opacity 1.5s ease;
+}
+.card[hidden] { display: none !important; }
+.card .inner { width: min(30rem, 100%); display: grid; gap: 1.4rem; text-align: center; }
+.card h1 { font-weight: 400; font-style: italic; font-size: clamp(2.4rem, 8vw, 4rem); margin: 0; color: var(--bone); letter-spacing: .01em; text-wrap: balance; }
+.card p { margin: 0; font-size: 1.1rem; line-height: 1.5; color: var(--ash); }
+.card .small { font-family: var(--mono); font-size: .72rem; letter-spacing: .14em; text-transform: uppercase; color: var(--ash-dim); line-height: 2; }
+.card label { font-style: italic; font-size: 1.15rem; color: var(--ash); }
+.card input {
+  font: inherit; font-size: 1.3rem; text-align: center; background: transparent; color: var(--bone);
+  border: 0; border-bottom: 1px solid var(--ash-dim); padding: .4rem; width: min(16rem, 100%); justify-self: center;
+  outline: none;
+}
+.card input:focus-visible { border-bottom-color: var(--bone); }
+.card button {
+  font-family: var(--mono); font-size: .8rem; letter-spacing: .2em; text-transform: uppercase;
+  background: transparent; color: var(--bone); border: 1px solid var(--ash-dim); padding: .8rem 1.6rem;
+  justify-self: center; cursor: pointer; transition: border-color .3s, background .3s;
+}
+.card button:hover, .card button:focus-visible { border-color: var(--bone); background: rgba(255,255,255,.04); outline: none; }
+
+#hideBtn {
+  position: fixed; left: 16px; bottom: 4vh; font-family: var(--mono); font-size: .75rem; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--ash); background: rgba(0,0,0,.4); border: 1px solid var(--ash-dim);
+  padding: 1rem 1.2rem; border-radius: 999px; touch-action: none;
+}
+@media (prefers-reduced-motion: reduce) { #sub.near { animation: none; } }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="view" width="480" height="270"></canvas></div>
+<div id="sub"></div>
+<div id="hint"></div>
+<div id="phone"><div class="bar"><span id="clock">3:04</span><span id="batt">▮▮▯ 23%</span></div><div id="notes"></div></div>
+<button id="hideBtn" hidden>hold to hide</button>
+
+<section class="card" id="startCard">
+  <div class="inner">
+    <h1>are you awake?</h1>
+    <p class="small">headphones · lights off · about five minutes<br>contains jump scares, grief, and loud sounds</p>
+    <label for="nameInput">What did your mum call you?</label>
+    <input id="nameInput" maxlength="18" placeholder="sweetheart" autocomplete="off" spellcheck="false">
+    <button id="startBtn" type="button">go to bed</button>
+  </div>
+</section>
+
+<section class="card" id="endCard" hidden>
+  <div class="inner">
+    <h1>are you awake?</h1>
+    <p>Call someone you love tomorrow.<br>Let it ring a little longer than usual.</p>
+    <button id="againBtn" type="button">again</button>
+  </div>
+</section>
+
+<script src="js/audio.js"></script>
+<script src="js/render.js"></script>
+<script src="js/game.js"></script>
+</body>
+</html>
