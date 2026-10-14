@@ -1,496 +1,392 @@
-// The director. One night, about four and a half minutes, scripted with
-// async/await so every beat reads top to bottom like a screenplay.
+// The director. 3:03 to 3:33 a.m., about four minutes.
+// Something with her number is in the house. It finds you by your phone:
+// the light of the screen, the sound of the ringer, your replies, your eyes.
 (() => {
-  const $ = id => document.getElementById(id);
-  const view = $('view'), subEl = $('sub'), hintEl = $('hint'), phoneEl = $('phone'), notesEl = $('notes');
-  Render.init(view);
+  const $ = s => document.querySelector(s);
+  const subEl = $('#sub'), hintEl = $('#hint');
+  const coarse = matchMedia('(pointer: coarse)').matches;
+  let speed = +(location.hash.match(/speed(\d+)/) || [0, 1])[1];
 
-  const S = {
-    t: 0, camX: 60, tx: 240, ty: 135, torch: false, torchOn: false, torchI: 0, userTorch: true,
-    door: 0.18, ward: 0, figStage: 0, figFace: 1, figMouth: 0, eyes: 0, figJitter: 0,
-    drawingV: 0, photoV: 0, chairV: 0, mirrorFig: 0, windowFace: 0, doorFingers: 0, wardEyes: false,
-    hallLight: false, neighbourOff: false, view: 'black', fade: 0, flash: 0, grain: 14,
-    phoneGlow: 0, scare: null, sub: null, day: false, dayLight: 1, desat: 0, warm: 0,
-    sink: 0, fingers: 0, gapLift: 0, breathRate: 1.2, bedShift: 0, hold: false, fear: 0,
-  };
-  let name = 'sweetheart', phase = 'title', mx = 0.5, my = 0.5;
-  const speed = +(location.hash.match(/speed(\d+)/) || [0, 1])[1];
-  let clock = 0, nightStart = 0;
-  const elapsed = () => clock - nightStart;
+  // render state read by World
+  const S = { t: 0, door: 0.06, doorSpeed: 1.2, hallLight: 1.6, hallFlicker: 0, phoneLight: 0.2, phoneColor: 0xcfe0ff, torch: false, flash: 0, fig: null, scare: null, exposure: 0.6, grain: 0.05, blur: 1.2, glitch: 0, aberr: 0, fade: 0 };
+  // the visitor
+  const V = { at: 'kitchen', attn: 0, peak: 0, said: {}, cause: 'light' };
+  const ORDER = ['kitchen', 'hall', 'stairs', 'landing', 'door', 'doorway', 'foot', 'side', 'gone'];
+  const near = (...ats) => ats.includes(V.at);
+  let phase = 'title', clock = 0, battery = 31, battT = 0, rulesT = 0, mumReplies = 0;
 
-  // ---------------------------------------------------------------- time
+  // ------------------------------------------------------------ time
   const waiters = [];
   const wait = ms => new Promise(res => waiters.push({ at: clock + ms / 1000, res }));
   const until = (fn, ms = 1e9) => new Promise(res => waiters.push({ at: clock + ms / 1000, fn, res }));
+  // the night's script simply stops when the night is over
+  const at = sec => until(() => false, Math.max(0, (sec - clock) * 1000)).then(() => alive() ? true : new Promise(() => {}));
   function tickWaiters() {
     for (let i = waiters.length - 1; i >= 0; i--) {
       const w = waiters[i];
-      if (w.fn && w.fn()) { waiters.splice(i, 1); w.res(true); }
-      else if (clock >= w.at) { waiters.splice(i, 1); w.res(false); }
+      if (w.fn && w.fn()) { waiters.splice(i, 1); w.res(true); } else if (clock >= w.at) { waiters.splice(i, 1); w.res(false); }
     }
   }
   const tweens = [];
-  function tween(key, to, ms, ease = x => x) {
-    for (let i = tweens.length - 1; i >= 0; i--) if (tweens[i].key === key) tweens.splice(i, 1);
-    tweens.push({ key, from: S[key], to, t0: clock, d: Math.max(0.001, ms / 1000), ease });
+  function tween(key, to, ms) { for (let i = tweens.length - 1; i >= 0; i--) if (tweens[i].key === key) tweens.splice(i, 1); tweens.push({ key, from: S[key], to, t0: clock, d: Math.max(0.001, ms / 1000) }); }
+  function tickTweens() { for (let i = tweens.length - 1; i >= 0; i--) { const w = tweens[i], k = Math.min(1, (clock - w.t0) / w.d); S[w.key] = w.from + (w.to - w.from) * k; if (k >= 1) tweens.splice(i, 1); } }
+  const alive = () => phase === 'night';
+
+  // ------------------------------------------------------------ words
+  let subTok = 0;
+  function think(text, ms = 3200) {
+    const tok = ++subTok; subEl.textContent = text; subEl.classList.add('on');
+    return wait(ms).then(() => { if (tok === subTok) subEl.classList.remove('on'); return wait(500); });
   }
-  function tickTweens() {
-    for (let i = tweens.length - 1; i >= 0; i--) {
-      const tw = tweens[i], k = Math.min(1, (clock - tw.t0) / tw.d);
-      S[tw.key] = tw.from + (tw.to - tw.from) * tw.ease(k);
-      if (k >= 1) tweens.splice(i, 1);
-    }
+  let hintTok = 0;
+  function hint(text, ms = 6000) { const tok = ++hintTok; hintEl.textContent = text; hintEl.classList.add('on'); wait(ms).then(() => { if (tok === hintTok) hintEl.classList.remove('on'); }); }
+  function clockText() { const m = Math.min(33, 3 + Math.floor(clock / 7.05)); return `3:${String(m).padStart(2, '0')}`; }
+
+  // ------------------------------------------------------------ her messages
+  let order = 0;
+  const msg = (thread, m, notify = true) => Phone.addMsg(thread, Object.assign({ order: ++order, time: clockText() }, m), { notify });
+  async function mumSays(text, typeMs = 1600) {
+    if (!alive()) return;
+    Phone.typing('mum', true); await wait(typeMs); if (!alive()) return;
+    msg('mum', { from: 'in', text, date: 'Today' });
+  }
+  function seedHistory() {
+    const h = (thread, date, from, text, time, vn) => Phone.addMsg(thread, { order: ++order, from, text, date, time, vn, seen: true }, { notify: false });
+    h('carol', 'Monday', 'in', 'So sorry for your loss darling. She was so proud of you. Call me any time xx', 'Mon');
+    h('sam', 'Monday', 'in', 'Take all the time you need. Thinking of you.', 'Mon');
+    h('mum', '14 March', 'in', null, '18:02', { id: 'vm_real', dur: '0:11' });
+    h('mum', '6 September', 'in', 'are you coming sunday? I’ll do a roast x', '11:40');
+    h('mum', '6 September', 'out', 'yes!! can’t wait', '11:52');
+    h('mum', '6 September', 'in', 'bring a coat it’s turned cold', '11:53');
+    h('mum', '28 September', 'in', 'hospital say I might come home tuesday 🙂', '16:20');
+    h('mum', '28 September', 'out', 'that’s amazing mum ❤️', '16:31');
+    h('mum', '28 September', 'in', 'love you. don’t worry about me x', '16:33');
+    h('mum', '2 October', 'in', 'are you awake? can’t sleep in here x', '03:12');
+    h('mum', '2 October', 'out', 'sorry mum, was asleep! love you, see you tomorrow x', '07:40');
+    h('danny', 'Tuesday', 'in', 'funeral’s at 11. I’ll pick you up at 10 x', 'Tue');
+    h('danny', 'Tuesday', 'in', 'you did so well today. she’d be proud', 'Tue');
+    Phone.recents('<small style="color:#e5484d;padding:1em;display:block">Mum ♥ · missed call · 2 Oct</small>');
   }
 
-  // ---------------------------------------------------------------- words
-  let subToken = 0, subPrio = 0;
-  function say(text, cls = 'thought', ms = 3000, prio = 2) {
-    if (prio < subPrio) return Promise.resolve();
-    const tok = ++subToken; subPrio = prio;
-    subEl.className = cls; subEl.textContent = text;
-    void subEl.offsetWidth; subEl.classList.add('on');
-    return wait(ms).then(() => {
-      if (tok !== subToken) return;
-      subEl.classList.remove('on'); subPrio = 0;
-      return wait(700);
+  // ------------------------------------------------------------ attention
+  // Everything the phone does is something it can notice.
+  function notice(amount, cause) {
+    if (!alive() || near('kitchen', 'gone')) return;
+    const scale = { hall: 0.3, stairs: 0.5, landing: 0.8, door: 1, doorway: 1.4, foot: 1.8, side: 2 }[V.at] || 0;
+    V.attn = Math.min(100, V.attn + amount * scale); V.cause = cause;
+  }
+  function onAction(type, d) {
+    if (!alive()) return;
+    if (type === 'reply') return reply(d);
+    if (type === 'ping' && !d.muted) notice(4, 'sound');
+    if (type === 'vn') notice(8, 'sound');
+    if (type === 'dial') return dial(d);
+    if (type === 'shutter') { if (d.flash) { S.flash = 1; notice(30, 'light'); } if (near('foot', 'side')) notice(10, 'look'); }
+    if (type === 'feed' && Feed.current.id === 'mum_live') liveComments();
+  }
+  function reply({ thread, text }) {
+    msg(thread, { from: 'out', text, date: 'Today' }, false);
+    if (thread === 'danny') {
+      if (/mum’s phone|mum's phone/.test(text)) { dannyWarned = true; }
+      else wait(4000).then(() => alive() && msg('danny', { from: 'in', text: 'same. try and get some sleep x', date: 'Today' }));
+      return;
+    }
+    // rule 1: it learns her from your answers
+    mumReplies++; notice(14, 'answer'); V.attn = Math.max(V.attn, mumReplies * 8);
+    const lines = ['it’s me love. it’s mum x', 'who else would it be', 'I knew you were awake', 'you always were a light sleeper', 'come down. please.'];
+    mumSays(lines[Math.min(lines.length - 1, mumReplies - 1)], 2200).then(() => {
+      if (alive() && mumReplies < 4) Phone.offer('mum', mumReplies === 1 ? ['mum??', 'this isn’t funny'] : mumReplies === 2 ? ['I’m not coming down', 'please stop'] : ['leave me alone']);
     });
   }
-  const line = (text, cls, ms) => say(text, cls, ms, 2);
-  function clearSub() { subToken++; subPrio = 0; subEl.classList.remove('on'); }
-  let hintTok = 0;
-  function hint(text, ms = 5000) {
-    const tok = ++hintTok; hintEl.textContent = text; hintEl.classList.add('on');
-    wait(ms).then(() => { if (tok === hintTok) hintEl.classList.remove('on'); });
+  async function dial(who) {
+    if (who === 'danny') {
+      Phone.inCall('Danny', 'danny', 'calling…', () => {});
+      await wait(2600); Phone.setCallSub('voicemail');
+      const ms = Sound.voice('danny_vm', { where: 'ear' }); await wait(ms + 400); if (Phone.st.call) Phone.endCall();
+    } else if (who === '999') {
+      Phone.inCall('Emergency', '999', 'calling…', () => {});
+      await wait(1800); Phone.setCallSub('00:01');
+      const ms = Sound.voice('op_999', { where: 'ear' }); notice(10, 'sound'); await wait(ms + 300); if (Phone.st.call) Phone.endCall();
+      think('That was her voice.');
+    } else if (who === 'mum') {
+      Phone.inCall('Mum ♥', 'mum', 'calling…', () => {}); notice(10, 'answer');
+      await wait(2400); Phone.setCallSub('00:01');
+      Sound.otherBreath('near', 0, 1, 0.5); await wait(2800);
+      const ms = Sound.voice('w_iknow', { where: 'ear', vol: 1.3 }); await wait(ms); if (Phone.st.call) Phone.endCall();
+    }
   }
-  // her voice. a whisper synth under subtitles.
-  function voice(text, opts = {}, cls = 'voice') {
-    const ms = Sound.speak(text.replace(/[‘’']/g, ''), opts);
-    return say(text, cls, Math.max(1600, ms + 700), 3);
-  }
-
-  // ---------------------------------------------------------------- phone
-  let phoneMin = 4, phoneTimer = null;
-  function phoneShow(on) { phoneEl.style.opacity = on ? 0.42 : 0; }
-  function notify(text, from = 'Mum ♥', { buzz = true } = {}) {
-    [...notesEl.children].forEach(n => n.classList.add('old'));
-    while (notesEl.children.length > 2) notesEl.firstChild.remove();
-    const n = document.createElement('div'); n.className = 'note';
-    const b = document.createElement('b'); b.textContent = `${from} · now`; n.append(b, document.createTextNode(text));
-    notesEl.append(n);
-    phoneEl.style.opacity = 1; S.phoneGlow = 1;
-    if (buzz) Sound.buzz(2);
-    clearTimeout(phoneTimer);
-    phoneTimer = setTimeout(() => { if (phase !== 'end') phoneEl.style.opacity = 0.42; }, 7000 / speed);
-  }
-  function setClock(txt) { $('clock').textContent = txt; }
-
-  // ---------------------------------------------------------------- fear
-  function fear(f) {
-    S.fear = f; Sound.dread(f); Sound.drone(0.07 + f * 0.08);
-    Sound.setHeart(f > 0.28 ? Math.round(62 + f * 62) : 0, 0.12 + f * 0.45);
+  let liveTimer = null;
+  function liveComments() {
+    clearInterval(liveTimer);
+    const lines = [['user8812', 'she’s awake'], ['▓▓▓', 'her light is on'], ['mum_♥', 'hello love x'], ['user0003', 'she can’t see you'], ['user8812', 'look up'], ['▓▓▓', 'behind the phone'], ['user0003', 'she’s holding her breath'], ['▓▓', 'go in']];
+    let i = 0;
+    liveTimer = setInterval(() => {
+      if (!alive() || Feed.current.id !== 'mum_live' || Phone.st.app !== 'feed') return clearInterval(liveTimer);
+      Phone.liveComment(...lines[i++ % lines.length]);
+    }, 1400);
   }
 
-  // ---------------------------------------------------------------- input
-  function aim(cx, cy) {
-    const r = view.getBoundingClientRect();
-    mx = Math.max(0, Math.min(1, (cx - r.left) / r.width));
-    my = Math.max(0, Math.min(1, (cy - r.top) / r.height));
+  // escalation: whispers, then yelling, then fists on the door
+  const ESC = [
+    [22, () => Sound.chorus(['w_iknow', 'w_awake', 'w_onlyme'], { count: 4, where: inRoom() ? 'room' : 'hall', spread: inRoom() ? 1 : 0.5 })],
+    [42, () => { Sound.voice('y_see', { where: inRoom() ? 'room' : 'hall', pan: inRoom() ? 0 : -0.55, vol: 1.1 }); if (!inRoom()) Sound.bang(3, 1); }],
+    [62, () => { Sound.voice(inRoom() ? 'y_hiding' : 'y_door', { where: inRoom() ? 'near' : 'hall', pan: inRoom() ? 0.3 : -0.55, vol: 1.2 }); if (!inRoom()) Sound.bang(5, 1.3); S.glitch = 0.5; mumSays('WHY ARE YOU HIDING FROM ME', 300); }],
+    [82, () => { Sound.voice('y_mother', { where: inRoom() ? 'near' : 'hall', pan: inRoom() ? -0.3 : -0.55, vol: 1.3 }); Sound.chorus(['w_look', 'w_here', 'w_hiding'], { count: 5, where: 'near', vol: 0.5 }); if (!inRoom()) Sound.bang(7, 1.5); S.glitch = 0.9; }],
+  ];
+  const inRoom = () => near('doorway', 'foot', 'side');
+  function escalate() {
+    if (ORDER.indexOf(V.at) < 3) return;
+    for (const [lvl, fn] of ESC) {
+      if (V.attn >= lvl && !V.said[lvl]) { V.said[lvl] = true; fn(); }
+      if (V.attn < lvl - 18) V.said[lvl] = false;
+    }
+    if (V.attn >= 100) {
+      if (inRoom()) return caught();
+      // it will not wait at the door any longer
+      V.attn = 70; Sound.bang(3, 1.6); Sound.doorCreak(0.6); S.doorSpeed = 6; S.door = 1.55; setAt('doorway');
+      Sound.voice('y_look', { where: 'room', pan: -0.5, vol: 1.3 });
+    }
   }
-  window.addEventListener('pointermove', e => aim(e.clientX, e.clientY));
-  window.addEventListener('pointerdown', e => {
-    if (phase === 'title' || phase === 'end') return;
-    if (e.target.id === 'hideBtn') return;
-    aim(e.clientX, e.clientY);
-    if (e.button === 2) return;
-    examine();
-  });
-  window.addEventListener('contextmenu', e => { if (phase !== 'title') { e.preventDefault(); toggleTorch(); } });
-  window.addEventListener('keydown', e => {
-    if (phase === 'title' || phase === 'end') return;
-    if (e.code === 'Space') { S.hold = true; e.preventDefault(); }
-    if (e.code === 'KeyF') toggleTorch();
-  });
-  window.addEventListener('keyup', e => { if (e.code === 'Space') S.hold = false; });
-  window.addEventListener('blur', () => { S.hold = false; });
-  const hideBtn = $('hideBtn');
-  hideBtn.addEventListener('pointerdown', e => { S.hold = true; e.preventDefault(); });
-  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => hideBtn.addEventListener(ev, () => { S.hold = false; }));
-  document.addEventListener('visibilitychange', () => {
-    if (phase === 'title' || phase === 'end') return;
-    document.title = document.hidden ? `${name}?` : 'are you awake?';
-  });
-  let torchOffAt = -1;
-  function toggleTorch() {
-    if (!['explore', 'texts', 'stairs', 'watch'].includes(phase)) return;
-    S.userTorch = !S.userTorch;
-    if (!S.userTorch) torchOffAt = clock;
+  function setAt(a) {
+    V.at = a; World.liveFrom(a);
+    S.fig = { door: S.door > 0.2 ? 'gap' : null, doorway: 'doorway', foot: 'foot', side: 'side' }[a] || null;
   }
 
-  // ---------------------------------------------------------------- examine
-  const seen = new Set();
-  function examine() {
-    if (!['explore', 'texts', 'stairs'].includes(phase) || S.view !== 'room' || !S.torchOn) return;
-    const spot = Render.spotAt(S);
-    if (!spot) return;
-    seen.add(spot);
-    const L = {
-      chair: S.chairV ? ['That’s just the cardigan.', 'That’s just her cardigan.'] : ['Her cardigan.', 'It still smells like her.'],
-      drawing: S.drawingV ? ['There are three of us in it now.', 'I didn’t draw the third one.'] : ['Me and Mum. I was six.', 'She wrote along the bottom for me:', 'MONSTERS CAN’T GET YOU UNDER THE BLANKET'],
-      photo: S.photoV ? ['She’s facing the wall.'] : ['Her sixtieth. She hated this photo.'],
-      door: phase === 'explore' ? ['She always left the hall light on for me.'] : ['It’s darker out there than it should be.'],
-      window: S.neighbourOff ? ['The light across the road has gone out.'] : ['Still raining.'],
-      mirror: ['I look like her now. Everyone says so.'],
-      boxes: ['Her whole life, in two boxes.', 'It should take up more room than that.'],
-    }[spot];
-    if (!L) return;
-    (async () => {
-      for (const l of L) { if (subPrio > 1) return; await say(l, 'thought', 2600, 1); }
-      if (spot === 'drawing' && !S.drawingV) taughtHide();
-    })();
-  }
-  let hideTaught = false;
-  function taughtHide() { if (hideTaught) return; hideTaught = true; hint(matchMedia('(pointer: coarse)').matches ? 'hold the button to hide under the blanket' : 'hold SPACE to hide under the blanket', 6000); }
-
-  // ---------------------------------------------------------------- per frame
-  let unlit = 0, advDelay = 2.6, mirrorArmed = false, mirrorSeen = false, mirrorLitT = 0, mirrorUnlitT = 0;
-  let windowArmed = false, windowSeen = false, flickerUntil = 0, nextFlicker = 0, stepInDark = 0, reached = false, wasHidden = false;
-
+  // ------------------------------------------------------------ per frame
+  let adapt = 0.6;
   function update(dt) {
-    // look and aim. the torch lags, and shakes with fear.
-    S.camX += ((mx * 120) - S.camX) * Math.min(1, dt * 4);
-    const shake = S.fear * 3.2 + (S.pullTo ? 2 : 0);
-    let ax = mx * Render.W, ay = my * Render.H;
-    if (S.pullTo) { ax += (S.pullTo[0] - S.camX - ax) * S.pull; ay += (S.pullTo[1] - ay) * S.pull; }
-    S.tx += (ax - S.tx) * Math.min(1, dt * 9) + (Math.random() - 0.5) * shake;
-    S.ty += (ay - S.ty) * Math.min(1, dt * 9) + (Math.random() - 0.5) * shake;
-
-    // the torch: old batteries
-    let on = S.torch && S.userTorch;
-    if (phase === 'watch' || phase === 'stairs') {
-      if (clock > nextFlicker) {
-        const len = 0.25 + Math.random() * (phase === 'watch' ? 0.7 : 0.3);
-        flickerUntil = clock + len; nextFlicker = clock + 5 + Math.random() * 6;
-        // in the dark between flickers, it sometimes takes a step
-        if (phase === 'watch' && Render.figLit(S) && Math.random() < 0.45) stepInDark = clock + len * 0.5;
+    const ps = Phone.st, bright = Phone.brightness();
+    const raised = ps.raised, torch = ps.torch;
+    const light = bright * (raised ? 1 : 0.35);
+    // the screen lights the room; held up, it also blinds you to it
+    S.phoneLight = bright * (raised ? 0.45 : 0.08);
+    S.torch = torch;
+    const target = torch ? 1.1 : (bright > 0 && raised) ? 0.9 + (1 - bright) * 0.6 : bright > 0 ? 4.8 : 7;
+    adapt += (target - adapt) * Math.min(1, dt * (target > adapt ? 0.55 : 3.5));
+    S.exposure = adapt; S.blur = raised ? 1.3 : 0.2;
+    S.flash = Math.max(0, S.flash - dt * 3); S.glitch = Math.max(0, S.glitch - dt * 0.8); S.aberr = S.glitch * 2 + V.attn / 160;
+    S.grain = 0.045 + V.attn / 1800;
+    if (alive()) {
+      // light under the door, light in the room
+      const k = { landing: 2.4, door: 3, doorway: 7, foot: 13, side: 15 }[V.at] || 0;
+      if (k) {
+        V.attn += light * k * dt;
+        if (torch) { if (near('foot', 'side')) { V.cause = 'torch'; return caught(); } V.attn += (near('doorway') ? 40 : 12) * dt; V.cause = 'light'; }
+        else if (light > 0.05) V.cause = 'light';
+        // feed audio through the speaker
+        if (ps.app === 'feed' && ps.on && !ps.locked && !ps.muted && Feed.current.audio) { V.attn += (inRoom() ? 4 : 1.5) * dt; V.cause = 'sound'; }
+        // a ringing phone
+        if (ps.call && ps.call.state === 'ringing' && !ps.muted) { V.attn += (inRoom() ? 22 : 7) * dt; V.cause = 'sound'; }
+        // rule 4: do not look at it
+        const looking = (!raised && adapt > 2.5) || (ps.app === 'cam' && ps.on && !ps.locked);
+        if (looking && near('foot', 'side', 'doorway')) { V.attn += (near('doorway') ? 5 : 11) * dt; V.cause = 'look'; }
+        // dark and quiet: it loses you
+        if (light < 0.04 && !torch && !(ps.call && !ps.muted)) V.attn = Math.max(0, V.attn - 2 * dt);
       }
+      V.peak = Math.max(V.peak, V.attn);
+      escalate();
+      Sound.setDread(Math.min(1, V.attn / 100 + (ORDER.indexOf(V.at) >= 3 ? 0.2 : 0)));
+      // the rules video counts once you have actually watched it
+      if (ps.app === 'feed' && Feed.current.rules && ps.on && !ps.locked) rulesT += dt;
+      // battery
+      battT += dt * (ps.on ? 1 : 0.3) * (torch ? 3 : 1);
+      if (battT > 8.5) { battT = 0; battery = Math.max(4, battery - 1); Phone.setBattery(battery); }
+      Phone.setTime(clockText());
     }
-    if (clock < flickerUntil) on = on && Math.random() < 0.25;
-    const target = on ? 1 - S.fear * 0.15 + (Math.random() - 0.5) * 0.06 : 0;
-    S.torchI += (target - S.torchI) * Math.min(1, dt * (on ? 30 : 40));
-    S.torchOn = on;
-    S.phoneGlow = Math.max(0, S.phoneGlow - dt * 0.18);
-
-    // hiding under the blanket
-    const canHide = ['explore', 'texts', 'stairs', 'watch', 'dark'].includes(phase);
-    const hidden = canHide && S.hold;
-    if (hidden !== wasHidden) {
-      wasHidden = hidden;
-      if (phase !== 'blanket') { S.view = hidden ? 'blanket' : 'room'; Sound.muffled(hidden); if (hidden) Sound.setBreath(18, 0.25); else Sound.setBreath(0); }
-    }
-
-    // the mirror
-    if (mirrorArmed) {
-      const ml = Render.lit(S, 'mirror') && S.view === 'room';
-      if (!mirrorSeen && !ml && S.mirrorFig !== 1) S.mirrorFig = 1;
-      if (S.mirrorFig === 1 && ml) { mirrorLitT += dt; if (mirrorLitT > 0.25 && !mirrorSeen) { mirrorSeen = true; Sound.sting('soft'); } }
-      if (mirrorSeen && !ml) { mirrorUnlitT += dt; if (mirrorUnlitT > 0.6) { S.mirrorFig = 0; mirrorArmed = false; } }
-    }
-    // the window, two floors up
-    if (windowArmed && !windowSeen && S.view === 'room' && Render.lit(S, 'window')) {
-      windowSeen = true; windowArmed = false; S.windowFace = 1; Sound.sting('sharp', 1.2); S.flash = 0.25;
-      wait(380).then(() => { S.windowFace = 0; });
-    }
-
-    // the visitor only moves when it is not being looked at
-    if (phase === 'watch' && S.figStage > 0 && S.figStage < 5) {
-      const seenNow = Render.figLit(S) && S.view === 'room';
-      if (stepInDark && clock > stepInDark) { stepInDark = 0; advance(); }
-      if (seenNow) { unlit = 0; S.eyes = 0.15; }
-      else {
-        unlit += dt; S.eyes = 0.8;
-        if (unlit > advDelay) { advance(); unlit = 0; }
-      }
-    }
-    S.flash = Math.max(0, S.flash - dt * 2.5);
-    if (S.sub && clock > S.sub.until) S.sub = null;
-    S.grain = 12 + S.fear * 12;
   }
-  function advance() {
-    S.figStage++;
-    advDelay = Math.max(1.5, advDelay - 0.25);
-    if (S.figStage === 2) { tween('door', 1, 500); Sound.doorCreak(0.8); }
-    else Sound.step('room', -0.6 + S.figStage * 0.2, 0.9);
-    if (S.figStage >= 5) reached = true;
-  }
-  function subliminal() {
-    // one frame, at the edge of the beam
-    const a = Math.random() * Math.PI * 2;
-    S.sub = { x: Math.max(30, Math.min(450, S.tx + Math.cos(a) * 110)), y: Math.max(30, Math.min(240, S.ty + Math.sin(a) * 70)), until: clock + 0.05 };
-    Sound.whoosh(0.05);
+  let heartAt = 0;
+  function heart() {
+    if (!alive()) return;
+    const bpm = ORDER.indexOf(V.at) >= 2 ? Math.round(64 + V.attn * 0.8 + (inRoom() ? 14 : 0)) : 0;
+    if (Math.abs(bpm - heartAt) > 6 || (!bpm && heartAt)) { heartAt = bpm; Sound.setHeart(bpm, 0.18 + V.attn / 250); }
   }
 
-  // ---------------------------------------------------------------- loop
+  // ------------------------------------------------------------ loop
+  const canvas = $('#world');
+  World.init(canvas);
+  Phone.init({ onAction, faceImage: () => World.faceImage });
+  addEventListener('resize', () => World.resize());
   let last = performance.now();
   function loop(now) {
-    const real = Math.min(0.05, (now - last) / 1000); last = now;
+    const real = Math.min(speed > 1 ? 0.25 : 0.05, (now - last) / 1000); last = now;
     const dt = real * speed;
-    S.t += dt; clock += dt;
-    if (phase !== 'title') { update(dt); tickTweens(); }
+    S.t += dt;
+    if (phase !== 'title') { clock += dt; update(dt); tickTweens(); Phone.update(dt); }
     tickWaiters();
     if (S.scare) S.scare.k = Math.min(1, (clock - S.scare.t0) / S.scare.d);
-    Render.frame(S);
-    view.style.transform = S.scare ? `translate(${(Math.random() - 0.5) * 24}px, ${(Math.random() - 0.5) * 24}px) scale(1.04)` : (S.fear > 0.6 ? `translate(${(Math.random() - 0.5) * S.fear}px, 0)` : '');
+    $('#screen').classList.toggle('see', Phone.views().length > 0);
+    // nothing to see behind the title and end cards
+    if (phase !== 'title' && phase !== 'end') World.render(S, dt, Phone.views());
     requestAnimationFrame(loop);
   }
-  function fit() {
-    const r = Math.min(innerWidth / 480, innerHeight / 270);
-    view.style.width = `${Math.floor(480 * r)}px`; view.style.height = `${Math.floor(270 * r)}px`;
-  }
-  addEventListener('resize', fit); fit();
   requestAnimationFrame(loop);
+  setInterval(heart, 1000);
+
+  // ------------------------------------------------------------ input
+  addEventListener('keydown', e => {
+    if (phase !== 'night') return;
+    if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) Phone.setRaised(!Phone.st.raised); }
+    if (e.code === 'KeyL') Phone.power();
+    if (e.code === 'KeyM') Phone.toggleMute();
+    if (e.code === 'ArrowDown' || e.code === 'KeyS') Phone.st.app === 'feed' && Phone.scrollFeed(1);
+    if (e.code === 'ArrowUp' || e.code === 'KeyW') Phone.st.app === 'feed' && Phone.scrollFeed(-1);
+    if (e.code === 'Escape' || e.code === 'Backspace') Phone.open('home');
+  });
+  $('#lowerBtn').addEventListener('click', () => { if (phase !== 'night') return; Phone.setRaised(!Phone.st.raised); $('#lowerBtn').textContent = Phone.st.raised ? 'lower phone' : 'raise phone'; });
+  $('#offBtn').addEventListener('click', () => { if (phase === 'night') Phone.power(); });
+  $('#silentBtn').addEventListener('click', () => { if (phase !== 'night') return; Phone.toggleMute(); $('#silentBtn').classList.toggle('on', Phone.st.muted); });
+  $('#screen').addEventListener('click', e => { if (e.target.classList.contains('off') && phase === 'night') Phone.power(); });
+  document.addEventListener('visibilitychange', () => { if (phase === 'night') document.title = document.hidden ? 'are you awake?' : 'are you awake?'; });
 
   // ================================================================ the night
+  let dannyWarned = false;
   async function intro() {
-    phase = 'intro'; S.view = 'black'; S.fade = 1;
-    await wait(1200);
-    await line('They buried her on Tuesday.', 'thought', 3000);
-    await line('You said you’d stay on and clear the house.', 'thought', 3200);
-    await line('Tonight you’re sleeping in your old room.', 'thought', 3000);
-    Sound.startAmbience();
-    S.view = 'room'; S.fade = 0; S.torch = true; tween('fade', 1, 3500);
-    phoneShow(true);
+    phase = 'intro'; S.fade = 0;
+    for (const l of ['They buried her on Tuesday.', 'You’re sleeping in your old room tonight.', 'It’s 3:03. You can’t sleep.']) await think(l, 2600);
+    phase = 'night'; clock = 0;
+    Sound.startAmbience(); tween('fade', 1, 2500);
   }
 
-  async function act1() {
-    phase = 'explore';
-    await wait(1500);
-    hint(matchMedia('(pointer: coarse)').matches ? 'drag to look · tap what you light' : 'move to look · click what you light', 7000);
-    const t0 = clock;
-    // the house settling. nothing yet. let them breathe.
-    (async () => { while (phase === 'explore') { await wait(6000 + Math.random() * 5000); if (phase === 'explore') Sound.creak(Math.random() < 0.5 ? 'hall' : 'room', Math.random() * 1.4 - 0.7, 0.8, 1, 0.3); } })();
-    await until(() => (seen.size >= 3 && clock - t0 > 22) || clock - t0 > 34);
-    await until(() => subPrio < 1, 4000);
-    if (!hideTaught) {
-      await line('Mum used to tell me monsters can’t get you under the blanket.', 'thought', 3400);
-      taughtHide();
-    }
-    await wait(1800);
-  }
+  async function night() {
+    hint(coarse ? 'swipe the feed · tap the phone' : 'scroll the feed · click the phone', 6000);
+    await at(9);  msg('danny', { from: 'in', text: 'you up?', date: 'Today' });
+    await at(12); msg('danny', { from: 'in', text: 'can’t sleep either. it’s so weird being in the house without her', date: 'Today' });
+    Phone.offer('danny', ['same. can’t sleep x', 'yeah. miss her']);
+    await at(21); hint(coarse ? 'lower phone · top left · to see the room' : 'SPACE · lower your phone to see the room', 6000);
 
-  async function act2() {
-    phase = 'texts';
-    setClock('3:06');
-    notify('are you awake?'); fear(0.15);
-    await wait(2400);
-    await line('…what?', 'thought', 1600);
-    await line('Her phone is downstairs. I put it in the kitchen drawer myself.', 'thought', 3600);
-    await wait(1000);
-    Sound.kettle(7.5);
-    await wait(3200);
-    await line('Someone’s in the kitchen.', 'thought', 2400);
-    await wait(1600);
-    notify('I made tea'); fear(0.25);
-    await wait(3200);
-    for (let i = 0; i < 5; i++) { Sound.step('down', -0.1 - i * 0.08, 0.8); await wait(720); }
-    S.drawingV = 1;
-    await wait(900);
-    voice(`${name}?`, { where: 'down', whisper: false, pan: -0.3, rate: 0.8 });
-    await wait(3400);
-    notify(`come down ${name}`);
-    await wait(3000);
-    // something sits on the end of the bed
-    Sound.bedSink(); S.bedShift = 2; tween('bedShift', 0, 1800);
-    mirrorArmed = true; mirrorSeen = false; mirrorLitT = 0; mirrorUnlitT = 0;
-    await line('The end of the bed just went down.', 'thought', 2400);
-    await line('Like someone sat on it.', 'thought', 2600);
-    await until(() => mirrorSeen, 7000);
-    if (mirrorSeen) { await until(() => !mirrorArmed, 4000); await line('There’s nobody there. There’s nobody there.', 'thought', 2800); }
-    else { mirrorArmed = false; S.mirrorFig = 0; }
-    fear(0.32);
-    Sound.musicBox({ where: 'down', warp: 1.6, beat: 0.5, slowdown: 0.025, vol: 0.7 });
-    await wait(1500);
-    await line('That’s my music box. That was in the loft.', 'thought', 3400);
-    S.photoV = 1; S.chairV = 1;
-    await wait(1500);
-    notify('your light is on');
-    if (!matchMedia('(pointer: coarse)').matches) hint('F · switch the torch off', 4000);
-    await until(() => !S.userTorch, 4000);
-    if (!S.userTorch) { await wait(1800); notify('don’t hide from me'); await wait(2400); S.userTorch = true; }
-    await line('Someone has her phone. That’s all this is.', 'thought', 3200);
-    // two floors up
-    windowArmed = true; windowSeen = false; Sound.glassTap(0.05);
-    await until(() => windowSeen, 5000); windowArmed = false;
-    if (windowSeen) { await wait(900); await line('We’re on the second floor.', 'thought', 2600); }
-    S.neighbourOff = true;
-    subliminal();
-    await wait(1200);
-    notify('why won’t you come down');
-    await wait(3400);
-  }
+    await at(28); mumSays('are you awake?', 10);
+    Phone.offer('mum', ['mum?', 'who is this?']);
+    await at(31); think('That’s Mum’s number.');
+    await at(36); V.at = 'kitchen'; Sound.kettle(7);
+    await at(39); think('…someone’s downstairs.');
+    await at(45); Sound.mugs(); mumSays('I made you a tea x');
+    await at(51); msg('mum', { from: 'in', vn: { id: 'vn1', dur: '0:06' }, date: 'Today' });
+    Phone.offer('danny', ['someone’s texting me from mum’s phone']);
+    await at(58); setAt('hall'); for (let i = 0; i < 4; i++) { Sound.step('down', -0.1 - i * 0.1, 0.8); await wait(650); }
+    Sound.voice('s_sweet', { where: 'down', pan: -0.2 });
+    await at(62); think('That’s her voice.');
 
-  async function act3() {
-    phase = 'stairs';
-    Sound.clock(false); Sound.rain(false, 1.5); fear(0.42);
-    setClock('3:08');
-    await wait(2600);
-    await line('The clock’s stopped.', 'thought', 2000);
-    await wait(600);
-    for (let i = 0; i < 13; i++) {
-      Sound.step(i < 9 ? 'stairs' : 'hall', -0.35 - i * 0.03, 0.55 + i * 0.035);
-      if (i === 6) subliminal();
-      await wait(1000 - i * 25);
-    }
-    fear(0.6);
-    await wait(2600);
-    Sound.knock('hall', -0.75, [0, 0.45, 0.62]);
-    await wait(1500);
-    await voice('it’s only me.', { where: 'hall', pan: -0.7, rate: 0.85 });
-    Sound.knock('hall', -0.75, [0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8], 1.1);
-    await wait(2600);
+    // she calls
+    await at(66); hint(coarse ? 'decline it · tap silent' : 'decline it · M for silent', 5000);
+    const r1 = await Phone.incoming('Mum ♥', 'mum', 8000);
+    if (r1 === 'accept') {
+      Phone.inCall('Mum ♥', 'mum', '00:01', () => {}); notice(16, 'answer');
+      const ms = Sound.voice('call1', { where: 'ear', vol: 1.2 }); await wait(ms + 200); if (Phone.st.call) Phone.endCall();
+      V.attn = Math.max(V.attn, 15);
+    } else if (r1 === 'decline') { mumSays('why did you hang up on me', 2000); }
+    else { msg('mum', { from: 'in', text: 'missed call', date: 'Today' }, false); if (!Phone.st.muted) mumSays('I can hear your phone x', 1800); }
+
+    await at(80); msg('danny', { from: 'in', vn: { id: 'danny_vn', dur: '0:08' }, date: 'Today' });
+    await at(84); msg('danny', { from: 'in', text: dannyWarned ? 'it’s here. her phone is HERE. I’m looking at it' : 'why is mum’s phone saying it’s online?? it’s in my drawer. switched off', date: 'Today' });
+    await at(88); think('Then who has her phone?');
+    await at(92); Feed.inject('mum_kitchen'); Phone.notify({ title: 'forU', body: 'mum_♥ posted a video', app: 'feed', video: 'mum_kitchen' });
+    await at(97); msg('danny', { from: 'in', text: 'ok this is messed up. my fyp keeps showing me this. watch it', date: 'Today' });
+    Feed.inject('rules'); Phone.notify({ title: 'forU', body: 'Danny sent you a video', app: 'feed', video: 'rules', silent: true });
+    await at(101); Sound.voice('s_comedown', { where: 'down', pan: -0.2, vol: 1.1 });
+
+    // the stairs
+    await at(108); setAt('stairs'); Feed.inject('mum_stairs'); Phone.notify({ title: 'forU', body: 'mum_♥ posted a video', app: 'feed', video: 'mum_stairs' });
+    for (let i = 0; i < 13; i++) { Sound.step(i < 9 ? 'stairs' : 'hall', -0.25 - i * 0.025, 0.55 + i * 0.035); await wait(880 - i * 15); }
+    await at(121); setAt('landing'); S.hallFlicker = 1; Sound.creak('hall', -0.55, 1.2, 0.8, 0.5);
+    Sound.voice('w_awake', { where: 'hall', pan: -0.55, vol: 1.1 });
+    think('She’s outside the door.');
+    await at(126); hint(coarse ? 'tap screen off' : 'L · turn your screen off', 6000);
+    mumSays(Phone.brightness() > 0 ? 'your light is on' : 'I know you’re in there', 900);
+    await at(131); tween('hallLight', 0.3, 600); S.hallFlicker = 0;
+
     // the door
-    S.doorFingers = 1; Sound.doorCreak(2.8); tween('door', 0.42, 2800);
-    await wait(1600);
-    S.doorFingers = 0; S.figStage = 1; S.eyes = 0.8;
-    phase = 'watch'; unlit = 0; advDelay = 2.6; reached = false; fear(0.7);
-    hint('don’t take your eyes off it', 4500);
-    const lures = (async () => {
-      await wait(4500); if (phase !== 'watch') return;
-      voice('you’ve got so tall.', { where: 'room', pan: -0.6 });
-      await wait(5000); if (phase !== 'watch') return;
-      Sound.wardrobeCreak(); tween('ward', 0.55, 1600); S.wardEyes = true;
-      await wait(5500); if (phase !== 'watch') return;
-      notify('look at me');
-      await wait(5000); if (phase !== 'watch') return;
-      voice('it’s mum. it’s mum. it’s your mum.', { where: 'room', pan: -0.4, rate: 1.4 }, 'near');
-      await wait(5500); if (phase !== 'watch') return;
-      Sound.glassTap(0.1);
-      await wait(4000); if (phase !== 'watch') return;
-      S.mirrorFig = 2;
-      await wait(3500); if (phase !== 'watch') return;
-      Sound.otherBreath('near', 0.7, 2, 0.4);
-      voice('why are you scared of me?', { where: 'near', pan: 0.6 }, 'near');
-      await wait(5000); if (phase !== 'watch') return;
-      notify('I’m right here');
-    })();
-    // whatever happens, the night ends inside five minutes: act 4 + 5 need ~92s
-    const budget = Math.max(18, Math.min(40, 300 - 92 - elapsed()));
-    await until(() => reached, budget * 1000);
-    void lures;
+    await at(134); setAt('door'); Sound.knock([0, 0.45, 0.62], 0.9);
+    await at(136); Sound.voice('w_onlyme', { where: 'hall', pan: -0.55, vol: 1.2 });
+    await at(140); mumSays('let me in', 600);
+    await at(144); Sound.voice('w_letmein', { where: 'hall', pan: -0.55, vol: 1.2 }); Sound.knock([0, 0.3, 0.6, 0.9, 1.2], 1);
+    await at(148);
+    const r2 = await Phone.incoming('Mum ♥', 'mum', 7000);
+    if (r2 === 'accept') { Phone.inCall('Mum ♥', 'mum', '00:01', () => {}); notice(20, 'answer'); Sound.voice('w_iknow', { where: 'ear', vol: 1.3 }); Sound.voice('w_iknow', { where: 'hall', pan: -0.55, delay: 0.05 }); await wait(2200); if (Phone.st.call) Phone.endCall(); }
+
+    // she has run out of patience with the door
+    await at(153); Sound.knock([0, 0.18, 0.36, 0.54, 0.72, 0.9, 1.08], 1.2);
+    await at(155); Sound.voice('y_door', { where: 'hall', pan: -0.55, vol: 1.25 }); Sound.bang(4, 1.3); S.glitch = 0.4;
+    await at(157); Feed.inject('mum_live'); World.liveFrom('door'); Phone.notify({ title: 'forU', body: 'mum_♥ started a LIVE video', app: 'feed', video: 'mum_live' });
+    await at(159.5); Sound.voice('y_see', { where: 'hall', pan: -0.55, vol: 1.3 }); Sound.bang(6, 1.5); S.glitch = 0.6;
+    // then nothing at all. then it opens the door
+    await at(163.5); Sound.silence(0.05);
+    await at(166); Sound.clock(false); S.doorSpeed = 0.6; S.door = 0.55; Sound.doorCreak(3.2);
+    await wait(1200); setAt('doorway');
+    await at(169); think('Don’t look at it.');
+    await at(172); Sound.voice('w_hiding', { where: 'room', pan: -0.4, vol: 1.1 });
+    await at(178); Sound.voice('y_hiding', { where: 'room', pan: -0.35, vol: 1.2 }); S.glitch = 0.5;
+    await at(175); mumSays('I can see you', 500);
+
+    // in the room. behind the phone.
+    await at(181); for (let i = 0; i < 4; i++) { Sound.step('room', -0.4 + i * 0.12, 0.7); await wait(700); } setAt('foot');
+    think('It’s at the end of the bed. Right behind the phone.', 3600);
+    const barrage = ['look at me', 'look at me', 'LOOK AT ME', 'it’s mum', 'it’s your mum', 'why won’t you look at me', 'look at me'];
+    for (let i = 0; i < 5 && alive(); i++) { await wait(3300); if (!alive()) return; msg('mum', { from: 'in', text: barrage[i], date: 'Today' }); if (i === 2) Sound.voice('w_look', { where: 'room', pan: 0, vol: 1.2 }); }
+    await at(193); Sound.chorus(['w_look', 'w_here', 'w_iknow', 'w_awake'], { count: 6, where: 'near', spread: 1, vol: 0.6 });
+    await at(201); if (!alive()) return;
+    setAt('side'); Sound.bedSink(); Sound.otherBreath('near', 0.75, 3, 0.5);
+    await wait(1500); Sound.voice('w_here', { where: 'near', pan: 0.85, vol: 1.3 });
+    for (let i = 5; i < 7 && alive(); i++) { await wait(2600); if (!alive()) return; msg('mum', { from: 'in', text: barrage[i], date: 'Today' }); }
+    // right next to your ear
+    await at(208.5); Sound.voice('y_look', { where: 'near', pan: 0.7, vol: 1.45 }); S.glitch = 0.9; S.flash = 0.15;
+    await at(212.4);
+    if (alive()) await survived();
   }
 
-  async function act4() {
-    phase = 'dark'; S.mirrorFig = 0; S.wardEyes = false;
-    clearSub(); fear(0.9);
-    // the batteries give out. every time the light comes back, it is closer.
-    const from = Math.max(1, Math.min(4, S.figStage));
-    S.pull = 0.85;
-    for (let st = from; st <= 6; st++) {
-      S.userTorch = false; await wait(st === from ? 300 : 650 + Math.random() * 300);
-      S.figStage = st <= 5 ? st : 0;
-      if (st === 2) S.door = 1;
-      const pos = Render.STAGES[Math.min(5, st)];
-      S.pullTo = [pos.x, pos.fy - pos.h * 0.8];
-      S.userTorch = true; S.torchI = 1; Sound.whoosh(0.08 + st * 0.03);
-      await wait(st === 5 ? 700 : 380);
-    }
-    S.userTorch = false; S.pullTo = null; S.pull = 0; S.figStage = 0;
-    S.torch = false;
-    Sound.drone(0.02, 0.5); Sound.dread(0); Sound.setHeart(0);
+  // ------------------------------------------------------------ endings
+  async function caught() {
+    if (phase !== 'night') return;
+    phase = 'caught';
+    const when = clockText();
+    Sound.silence(0.1); Sound.stopFeed(); Sound.ring(false); Sound.setHeart(0);
+    // a breath of nothing, then the phone is knocked out of your hands
+    await wait(350);
+    if (!Phone.st.on) Phone.wake(3);
+    $('#phone').classList.add('drop'); S.blur = 0; $('#keys').hidden = true; subEl.classList.remove('on'); hintEl.classList.remove('on');
+    S.scare = { t0: clock, d: 1.7, k: 0 }; S.fig = null; S.exposure = 1.6;
+    Sound.voice('y_look', { where: 'near', vol: 1.4 }); Sound.voice('scream', { where: 'ear', vol: 1.2, delay: 0.35 }); Sound.shriek(1);
+    for (let i = 0; i < 17; i++) { S.glitch = 0.4 + Math.random() * 0.8; S.flash = Math.random() < 0.15 ? 0.4 : 0; document.body.style.transform = `translate(${(Math.random() - 0.5) * 22}px, ${(Math.random() - 0.5) * 22}px)`; await wait(100); }
+    Sound.stopAll(0.02); S.scare = null; S.fade = 0; document.body.style.transform = '';
+    await wait(1600);
+    const why = { light: 'It saw your light.', sound: 'It heard your phone.', answer: 'You answered her.', look: 'You looked.', torch: 'You turned the light on.' }[V.cause] || 'It found you.';
+    end(`${when} a.m.`, why, 'She has your number now.');
+  }
+  async function survived() {
+    phase = 'survived';
+    Phone.setTime('3:33'); Sound.silence(0.2); Sound.setHeart(0); setAt('gone'); S.fig = null;
+    await wait(4200);
+    msg('danny', { from: 'in', text: 'I’m downstairs. let myself in with mum’s key. her phone is in my pocket. switched off. where are you?', date: 'Today' });
+    if (!Phone.st.on) Phone.wake(5);
+    await wait(5200);
+    // 1%
+    Phone.setBattery(1); await wait(1400);
+    Phone.sleep(); $('#phone').classList.add('down'); S.phoneLight = 0; tween('fade', 0.5, 2000);
+    await wait(4200);
+    Sound.restore(0.1);
+    Sound.voice('w_night', { where: 'ear', vol: 1.4 });
     await wait(2600);
-    Sound.setHeart(120, 0.55);
-    await voice('under the blanket, love. quickly.', { where: 'near', pan: 0.35, rate: 1.1 }, 'real');
-    hint(matchMedia('(pointer: coarse)').matches ? 'hold the button' : 'hold SPACE', 6000);
-    const hid = await until(() => S.hold, 6500);
-    if (!hid) return scare(true);
-    phase = 'blanket'; S.view = 'blanket'; Sound.muffled(true); Sound.setBreath(30, 0.4);
-    const holding = ms => until(() => !S.hold, ms).then(let_go => !let_go);
-    if (!await holding(2500)) return scare(true);
-    for (let i = 0; i < 3; i++) { Sound.step('room', 0.1 * i, 0.9); if (!await holding(800)) return scare(true); }
-    Sound.bedSink(); tween('sink', 0.7, 900);
-    if (!await holding(3000)) return scare(true);
-    Sound.setHeart(0); Sound.otherBreath('room', 0.15, 2, 0.6);
-    if (!await holding(3200)) return scare(true);
-    voice('it’s alright. it’s only me.', { where: 'room', pan: 0.1, rate: 0.85 });
-    if (!await holding(3800)) return scare(true);
-    voice('let me see your face.', { where: 'room', pan: 0.05, rate: 0.75 });
-    tween('fingers', 1, 3200); tween('gapLift', 0.4, 3200);
-    if (!await holding(4800)) return scare(true);
-    tween('fingers', 0, 1500); tween('gapLift', 0, 1500);
-    if (!await holding(1600)) return scare(true);
-    // nothing. your own breath stops.
-    Sound.setBreath(0); Sound.muffled(true);
-    if (!await holding(3200)) return scare(true);
-    Sound.speak('monsters cant get you under here', { bus: 'self', pan: 0.95, rate: 0.9, vol: 1.4 });
-    say('monsters can’t get you under here.', 'near', 3000, 3);
-    await wait(2700);
-    return scare(false);
+    Sound.stopAll(0.05); S.fade = 0;
+    await wait(1400);
+    end('3:33 a.m.', 'You didn’t look.', 'She’ll text again tomorrow night.');
+  }
+  function end(time, title, text) {
+    phase = 'end'; document.body.classList.remove('playing');
+    $('#endTime').textContent = time; $('#endTitle').textContent = title; $('#endText').textContent = text;
+    $('#endCard').hidden = false; $('#phone').hidden = true; $('#keys').hidden = true; $('#touch').hidden = true;
   }
 
-  async function scare(dark) {
-    phase = 'scare'; hintEl.classList.remove('on');
-    // nothing on screen but the face: kill the words without a fade
-    subEl.style.transition = 'none'; clearSub(); void subEl.offsetWidth; subEl.style.transition = '';
-    // her phone, ringing, lights the face from below
-    Sound.muffled(false); Sound.ring(true, 'self');
-    notesEl.textContent = ''; notify('incoming call', 'Mum ♥', { buzz: false }); S.phoneGlow = 1;
-    if (S.view === 'blanket') { await wait(120); }
-    S.scare = { t0: clock, d: 1.3, size: dark ? 300 : 340, cold: true, k: 0 };
-    Sound.scream('self'); S.fear = 1;
-    await wait(1300);
-    Sound.ring(false); Sound.stopAll(0.02); Sound.killAmbience();
-    S.scare = null; S.view = 'black'; phoneShow(false); notesEl.textContent = '';
-  }
-
-  async function act5() {
-    phase = 'morning'; S.fear = 0; S.view = 'black'; clearSub();
-    await wait(3400);
-    Sound.restoreMaster(0.9, 3); Sound.birds(true);
-    Object.assign(S, { day: true, view: 'room', torch: false, userTorch: false, figStage: 0, door: 0, ward: 0, chairV: 0, photoV: 0, mirrorFig: 0, windowFace: 0, neighbourOff: false, desat: 0.3, warm: 0.6, sink: 0, fingers: 0, fade: 0 });
-    tween('fade', 1, 4500);
-    setClock('7:42'); $('batt').textContent = '▮▯▯ 9%';
-    await wait(3500);
-    phoneShow(true);
-    notify('saved voicemail · 0:41 · 14 March', 'Mum ♥', { buzz: false });
-    await wait(1800);
-    Sound.tapeHiss(true); Sound.musicBox({ bus: 'self', beat: 0.62, vol: 0.32 });
-    for (const [l, ms] of [['hi love, it’s only me.', 2600], ['nothing important.', 2000], ['I just wanted to hear your voice.', 2800], ['you sounded tired last time. are you sleeping?', 3400], ['…anyway. call me back when you can.', 3000], ['love you. bye. bye. bye bye.', 3400]]) await line(l, 'real', ms);
-    Sound.tapeHiss(false);
-    await line('saved voicemail · played 214 times', 'label', 3400);
-    tween('fade', 0, 3000); Sound.birds(false);
-    await wait(3200);
-    S.view = 'black';
-    await wait(1600);
-    // one more thing
-    notesEl.textContent = ''; phoneEl.style.opacity = 1;
-    const n = document.createElement('div'); n.className = 'note';
-    const b = document.createElement('b'); b.textContent = 'Mum ♥'; n.append(b, document.createTextNode('is typing…')); notesEl.append(n);
-    await wait(3800);
-    phoneEl.style.opacity = 0;
-    await wait(1500);
-  }
-
-  async function night(from = 0) {
-    const acts = [intro, act1, act2, act3, act4, act5];
-    for (let i = from; i < acts.length; i++) await acts[i]();
-    phase = 'end'; document.body.classList.remove('playing'); hideBtn.hidden = true;
-    $('endCard').hidden = false; document.title = 'are you awake?';
-  }
-
-  // ---------------------------------------------------------------- start
-  async function begin(from = 0) {
-    const v = $('nameInput').value.trim().replace(/\s+/g, ' ');
-    name = v || 'sweetheart';
+  // ------------------------------------------------------------ start
+  async function begin() {
+    $('#startBtn').disabled = true; $('#startBtn').textContent = 'loading…';
     await Sound.init();
     try { if (!document.fullscreenElement && document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen(); } catch (e) {}
-    $('startCard').hidden = true; document.body.classList.add('playing');
-    if (matchMedia('(pointer: coarse)').matches) hideBtn.hidden = false;
-    if (from >= 1) { Sound.startAmbience(); S.view = 'room'; S.fade = 1; S.torch = true; phoneShow(true); }
-    nightStart = clock;
-    night(from);
+    $('#startCard').hidden = true; document.body.classList.add('playing');
+    if (coarse) { $('#touch').hidden = false; $('#keys').hidden = true; }
+    seedHistory(); Phone.feedChanged();
+    await intro();
+    await night();
   }
-  $('startBtn').addEventListener('click', () => begin(+(location.hash.match(/act(\d)/) || [0, 0])[1]));
-  $('nameInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('startBtn').click(); });
-  $('againBtn').addEventListener('click', () => location.reload());
-
-  window.__night = { S, jump: begin, get phase() { return phase; } };
+  $('#startBtn').addEventListener('click', begin);
+  $('#againBtn').addEventListener('click', () => location.reload());
+  window.__night = { setSpeed: v => { speed = v; }, S, V, get phase() { return phase; }, get clock() { return clock; }, Phone, Feed };
 })();
